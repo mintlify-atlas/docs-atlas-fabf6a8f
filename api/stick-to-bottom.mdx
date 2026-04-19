@@ -1,0 +1,189 @@
+---
+title: "StickToBottom class — constructor and methods"
+description: "Complete reference for the StickToBottom class — constructor, reactive properties, and methods for controlling auto-scroll in Svelte 5 components."
+---
+
+`StickToBottom` is the single export from `stick-to-bottom-svelte`. You instantiate it inside a Svelte 5 component using Svelte runes context, bind two element references to it, and it handles all scroll tracking, animation, and user interaction detection automatically.
+
+## Constructor
+
+```typescript
+new StickToBottom(options: StickToBottomOptions)
+```
+
+Pass an options object with at minimum the two required element getters. All other options are optional. See [StickToBottomOptions](/api/options) for the full reference.
+
+<ParamField body="options" type="StickToBottomOptions" required>
+  Configuration object. Must include `scrollElement` and `contentElement` getters. Spring animation defaults and scroll behavior can be customized here.
+</ParamField>
+
+**Minimal example:**
+
+```svelte
+<script lang="ts">
+  import { StickToBottom } from 'stick-to-bottom-svelte';
+
+  let scrollElement = $state<HTMLElement>();
+  let contentElement = $state<HTMLElement>();
+
+  const stickToBottom = new StickToBottom({
+    scrollElement: () => scrollElement,
+    contentElement: () => contentElement,
+  });
+</script>
+
+<div bind:this={scrollElement} class="h-96 overflow-y-auto">
+  <div bind:this={contentElement}>
+    <!-- content -->
+  </div>
+</div>
+```
+
+<Note>
+  `StickToBottom` uses `$effect` internally and must be constructed inside a Svelte 5 component or inside a function that runs within a reactive context.
+</Note>
+
+---
+
+## Properties
+
+All properties are reactive. Reading them inside a `$derived` expression, `$effect`, or a Svelte template will automatically re-run that context when the value changes. `scrollTop` and `targetScrollTop` are backed by `createSubscriber`, which subscribes to scroll and wheel events on the scroll element.
+
+<ResponseField name="isNearBottom" type="boolean">
+  `true` when `scrollDifference` is 70 px or less. Updated on every scroll and resize event. Use this to show or hide a "scroll to bottom" affordance.
+
+  ```svelte
+  {#if !stickToBottom.isNearBottom}
+    <button onclick={() => stickToBottom.scrollToBottom()}>
+      Scroll to bottom
+    </button>
+  {/if}
+  ```
+</ResponseField>
+
+<ResponseField name="isAtBottom" type="boolean">
+  `true` when either the internal `isAtBottomState` or `isNearBottomState` flag is set. `isAtBottomState` is managed by auto-scroll logic and manual calls; `isNearBottomState` reflects the physical position. This is the primary flag for whether the container is tracking the bottom.
+
+  ```svelte
+  <div class="status">
+    {stickToBottom.isAtBottom ? 'Auto-scroll active' : 'Paused'}
+  </div>
+  ```
+</ResponseField>
+
+<ResponseField name="escapedFromLock" type="boolean">
+  `true` after the user has manually scrolled away from the bottom (or `stopScroll()` has been called). Resets to `false` when the user scrolls back near the bottom or `scrollToBottom()` is called.
+
+  ```svelte
+  {#if stickToBottom.escapedFromLock}
+    <p>You've scrolled away — new messages below.</p>
+  {/if}
+  ```
+</ResponseField>
+
+<ResponseField name="scrollTop" type="number">
+  The current `scrollTop` value of the scroll element. Reactive via `createSubscriber` — re-evaluates whenever a `scroll` or `wheel` event fires on the scroll element. Returns `0` when the element is not yet mounted.
+
+  ```svelte
+  <p>Current position: {stickToBottom.scrollTop}px</p>
+  ```
+</ResponseField>
+
+<ResponseField name="targetScrollTop" type="number">
+  The maximum scrollable position, computed as `scrollElement.scrollHeight - 1 - scrollElement.clientHeight`. This is the raw "bottom" value before any custom `targetScrollTop` function is applied. Returns `0` when either element is not mounted.
+
+  ```svelte
+  <p>Bottom is at: {stickToBottom.targetScrollTop}px</p>
+  ```
+</ResponseField>
+
+<ResponseField name="scrollDifference" type="number">
+  The distance between the effective target scroll position and the current scroll position (`calculatedTargetScrollTop - scrollTop`). When this value reaches `0` the container is at the bottom. When it exceeds `70` the user is considered to have scrolled away.
+
+  ```svelte
+  <p>{stickToBottom.scrollDifference}px from bottom</p>
+  ```
+</ResponseField>
+
+---
+
+## Methods
+
+### scrollToBottom
+
+```typescript
+scrollToBottom(options?: ScrollToBottomOptions): Promise<boolean> | boolean
+```
+
+Scroll the container to the bottom and re-enable auto-scroll. Returns a `Promise<true>` when the scroll completes successfully, or `Promise<false>` if the scroll was interrupted (e.g., the user scrolled up while it was in progress).
+
+<ParamField body="options" type="ScrollToBottomOptions">
+  Controls the animation, wait behavior, and other scroll parameters. Accepts a `ScrollBehavior` string shorthand or a full options object. See [ScrollToBottomOptions](/api/types#scrolltobottomoptions) for details.
+</ParamField>
+
+<CodeGroup>
+
+```svelte instant scroll
+<script lang="ts">
+  // Jump to bottom immediately — no animation
+  stickToBottom.scrollToBottom('instant');
+</script>
+```
+
+```svelte spring scroll
+<script lang="ts">
+  // Scroll with a custom spring animation
+  stickToBottom.scrollToBottom({
+    animation: { damping: 0.9, stiffness: 0.1, mass: 0.8 },
+  });
+</script>
+```
+
+```svelte wait and duration
+<script lang="ts">
+  // Wait for any in-progress scroll, then hold at the
+  // bottom for 500 ms after arriving
+  stickToBottom.scrollToBottom({
+    wait: true,
+    duration: 500,
+  });
+</script>
+```
+
+```svelte async usage
+<script lang="ts">
+  async function sendAndScroll() {
+    await sendMessage();
+    const reached = await stickToBottom.scrollToBottom({ animation: 'instant' });
+    if (!reached) {
+      console.log('Scroll was interrupted by user');
+    }
+  }
+</script>
+```
+
+</CodeGroup>
+
+<Tip>
+  Calling `scrollToBottom()` without arguments uses the instance-level spring defaults set in the constructor options.
+</Tip>
+
+---
+
+### stopScroll
+
+```typescript
+stopScroll(): void
+```
+
+Immediately halts any in-progress auto-scroll animation and sets `escapedFromLock` to `true`. The instance will not resume auto-scrolling on content resize until the user scrolls back near the bottom or `scrollToBottom()` is called.
+
+```svelte
+<button onclick={() => stickToBottom.stopScroll()}>
+  Pause auto-scroll
+</button>
+```
+
+<Note>
+  This is equivalent to what happens internally when the user scrolls up. The scroll element's position is not changed — only the tracking state is updated.
+</Note>

@@ -1,0 +1,182 @@
+---
+title: "Spring physics and instant scroll animation"
+description: "Learn how stick-to-bottom-svelte uses spring physics and instant scrolling, and how to tune damping, stiffness, and mass for your use case."
+---
+
+stick-to-bottom-svelte ships two animation modes: a spring-physics model that accelerates and decelerates smoothly, and an instant mode that jumps to the target position in a single frame. Both modes are driven by the same `requestAnimationFrame` loop, and both can be configured globally in the constructor or overridden on a per-call basis.
+
+## Animation types
+
+The `Animation` type is a union of `ScrollBehavior` (a native browser string) and `SpringAnimation` (a plain object of physics parameters):
+
+```typescript
+export type SpringAnimation = Partial<typeof DEFAULT_SPRING_ANIMATION>;
+export type Animation = ScrollBehavior | SpringAnimation;
+```
+
+In practice the library only acts on `'instant'` from the `ScrollBehavior` string values. Any other `ScrollBehavior` string is treated as a spring animation using the default parameters.
+
+## Spring animation
+
+The spring model updates a velocity value on each animation frame and accumulates the result into the scroll position.
+
+### Physics formula
+
+```typescript
+this.velocity =
+  (behavior.damping * this.velocity + behavior.stiffness * this.scrollDifference) /
+  behavior.mass;
+
+this.accumulated += this.velocity * tickDelta;
+this.setScrollTop(this.scrollTop + this.accumulated);
+```
+
+`scrollDifference` is the distance remaining to the target (`calculatedTargetScrollTop - scrollTop`). As the container approaches the bottom, `scrollDifference` shrinks and so does the velocity increment, producing the characteristic ease-out curve.
+
+### Frame timing
+
+The loop targets 60 fps using `SIXTY_FPS_INTERVAL_MS = 1000 / 60`. Each frame computes a `tickDelta` — the ratio of actual elapsed time to that interval — and multiplies velocity by it:
+
+```typescript
+const tickDelta = (tick - (this.lastTick ?? tick)) / SIXTY_FPS_INTERVAL_MS;
+```
+
+`tickDelta` normalises the animation against frame-rate variance. On a 120 Hz display, `tickDelta` ≈ 0.5 per frame; on a slow frame, `tickDelta` > 1. The spring behaviour remains consistent regardless of device refresh rate.
+
+### Accumulated scroll
+
+The `accumulated` field holds sub-pixel scroll progress between frames. If `setScrollTop` actually moves the element (`scrollTop` changes), `accumulated` resets to `0` so the next frame starts fresh:
+
+```typescript
+if ($state.snapshot(this.scrollTop) !== snapshottedScrollTop) {
+  this.accumulated = 0;
+}
+```
+
+If the element does not move (e.g. already at the boundary), `accumulated` continues to build until it is large enough to produce a visible change.
+
+### Animation termination
+
+The frame loop exits when `scrollTop` reaches or passes `calculatedTargetScrollTop`. At that point the `duration` guard is checked: if `durationElapsed` is still in the future, the loop re-enters with an updated `startTarget`:
+
+```typescript
+if (durationElapsed > Date.now()) {
+  startTarget = this.calculatedTargetScrollTop;
+  return next();
+}
+```
+
+`RETAIN_ANIMATION_DURATION_MS = 350` is the default value passed as `duration` for resize-triggered scrolls, ensuring the animation stays active for 350 ms after reaching the bottom. This keeps the container locked during rapid content bursts.
+
+## Default spring values
+
+```typescript
+const DEFAULT_SPRING_ANIMATION = {
+  damping: 0.7,
+  stiffness: 0.05,
+  mass: 1.25
+};
+```
+
+| Parameter | Default | Range | Effect |
+|-----------|---------|-------|--------|
+| `damping` | `0.7` | 0–1 | Higher values bleed off velocity faster, reducing overshoot. `0` = no damping (oscillates indefinitely). `1` = critically damped. |
+| `stiffness` | `0.05` | 0–1 | Controls how aggressively velocity builds relative to the remaining distance. Higher = reaches full speed sooner. |
+| `mass` | `1.25` | 0.5–3 | Divides the combined damping + stiffness term. Higher = heavier feel, slower overall motion. |
+
+## Instant animation
+
+When `behavior === 'instant'`, the frame loop skips the physics calculation and calls `setScrollTop` directly with the current `calculatedTargetScrollTop`:
+
+```typescript
+if (behavior === 'instant') {
+  this.setScrollTop(this.calculatedTargetScrollTop);
+  return next();
+}
+```
+
+The loop still continues (`return next()`) until the scroll target is reached, so `wait` and `duration` semantics work the same as for spring animations.
+
+## How animations merge
+
+Constructor options form the base; per-call options override individual fields. The `mergeAnimations` function processes each animation in order, applying object keys on top of the running result:
+
+```typescript
+function mergeAnimations(...animations: (Animation | boolean | undefined)[]) {
+  const result = { ...DEFAULT_SPRING_ANIMATION };
+  let instant = false;
+
+  for (const animation of animations) {
+    if (animation === 'instant') {
+      instant = true;
+      continue;
+    }
+    if (typeof animation !== 'object') continue;
+
+    instant = false; // a later object overrides a prior 'instant'
+    result.damping   = animation.damping   ?? result.damping;
+    result.stiffness = animation.stiffness ?? result.stiffness;
+    result.mass      = animation.mass      ?? result.mass;
+  }
+
+  return instant ? 'instant' : animationCache.get(JSON.stringify(result))!;
+}
+```
+
+A call site passing `animation: 'instant'` completely overrides a spring base. Conversely, a partial `SpringAnimation` object (e.g. `{ stiffness: 0.2 }`) only overrides the keys it provides.
+
+## Animation cache
+
+Resolved spring objects are stored in a `Map` keyed by their JSON representation:
+
+```typescript
+const animationCache = new Map<string, Readonly<Required<SpringAnimation>>>();
+```
+
+Each cached object is frozen with `Object.freeze`. The cache ensures that two calls with identical physics settings return the exact same object reference, which allows the animation loop's identity check to avoid unnecessary re-renders:
+
+```typescript
+if (isEqual($state.snapshot(this.animation.behavior), behavior)) {
+  this.lastTick = tick;
+}
+```
+
+## Resize animation vs. default animation
+
+The constructor accepts separate `resize` and default (root-level) spring options:
+
+```typescript
+export interface StickToBottomOptions extends SpringAnimation, ScrollElements {
+  resize?: Animation;
+  initial?: Animation | boolean;
+}
+```
+
+- Root-level `damping`, `stiffness`, `mass` form the base for all scrolls.
+- `resize` overrides the base specifically for content-growth-triggered scrolls.
+- `initial` overrides the base for the very first resize after mount.
+
+If `resize` is omitted, resize-triggered scrolls inherit the root spring parameters.
+
+## Practical tuning guide
+
+| Use case | `damping` | `stiffness` | `mass` | Notes |
+|----------|-----------|-------------|--------|-------|
+| Chat messages | 0.7–0.8 | 0.05–0.1 | 1.0–1.5 | Smooth, natural feel; slight lag acceptable |
+| Log tailing | — | — | — | Use `'instant'`; no animation needed |
+| Streaming text | 0.8 | 0.05 | 1.0 | Gentle follow with `resize: { stiffness: 0.05 }` |
+| Snappy UI | 0.6 | 0.15–0.3 | 0.8 | Quick response; higher stiffness reaches target faster |
+
+<Tip>
+  When tuning for streaming content, configure `resize` separately from the
+  default animation. A low-stiffness `resize` spring keeps the view glued to
+  the bottom as tokens arrive, while a snappier default applies when the user
+  calls `scrollToBottom()` manually.
+</Tip>
+
+<Note>
+  `RETAIN_ANIMATION_DURATION_MS = 350` keeps the animation loop alive for
+  350 ms after reaching the bottom. During rapid streaming this prevents the
+  loop from exiting and immediately re-entering on every token append,
+  reducing the number of animation state transitions.
+</Note>

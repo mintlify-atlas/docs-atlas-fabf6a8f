@@ -1,0 +1,207 @@
+---
+title: "Handle streaming content with stick-to-bottom-svelte"
+description: "Manage auto-scroll for AI-generated text and SSE streams where content arrives in rapid bursts. Covers the duration option and spring vs instant trade-offs."
+---
+
+AI chat completions, server-sent events, and token-by-token text generation share an awkward scrolling challenge: content grows in many small increments over several seconds, and a spring animation that feels smooth for a single large message can look jittery when triggered dozens of times per second. `stick-to-bottom-svelte` addresses this with the `duration` option, which holds the scroll lock open for either a fixed number of milliseconds or for the entire lifetime of a `Promise` — keeping the container anchored to the bottom throughout the stream without re-triggering the scroll animation on every token.
+
+## Full AI streaming example
+
+The component below simulates a streaming AI response, appending one token at a time. The `duration` option is set to the `fetch` promise so auto-scroll stays active for exactly as long as the stream is running.
+
+```svelte AiChat.svelte
+<script lang="ts">
+  import { StickToBottom } from 'stick-to-bottom-svelte';
+
+  type Message = {
+    id: number;
+    role: 'user' | 'assistant';
+    content: string;
+  };
+
+  let messages = $state<Message[]>([]);
+  let input = $state('');
+  let isStreaming = $state(false);
+  let scrollElement = $state<HTMLElement>();
+  let contentElement = $state<HTMLElement>();
+
+  const stickToBottom = new StickToBottom({
+    scrollElement: () => scrollElement,
+    contentElement: () => contentElement,
+    damping: 0.7,
+    stiffness: 0.05,
+    mass: 1.25,
+  });
+
+  async function sendMessage() {
+    if (!input.trim() || isStreaming) return;
+
+    const userMessage: Message = { id: Date.now(), role: 'user', content: input };
+    messages = [...messages, userMessage];
+    input = '';
+    isStreaming = true;
+
+    // Add an empty assistant message to stream into
+    const assistantId = Date.now() + 1;
+    messages = [...messages, { id: assistantId, role: 'assistant', content: '' }];
+
+    // Build the fetch promise and pass it as the duration
+    const fetchPromise = fetch('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message: userMessage.content }),
+    }).then(async (response) => {
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        messages = messages.map((m) =>
+          m.id === assistantId ? { ...m, content: m.content + chunk } : m
+        );
+      }
+    }).finally(() => {
+      isStreaming = false;
+    });
+
+    // Hold scroll lock for the entire duration of the fetch stream
+    stickToBottom.scrollToBottom({
+      animation: { damping: 0.7, stiffness: 0.05, mass: 1.25 },
+      duration: fetchPromise,
+    });
+  }
+</script>
+
+<div class="ai-chat">
+  <div bind:this={scrollElement} class="messages-scroll">
+    <div bind:this={contentElement} class="messages-content">
+      {#each messages as message (message.id)}
+        <div class="message message--{message.role}">
+          <strong>{message.role === 'user' ? 'You' : 'Assistant'}</strong>
+          <p>{message.content}{#if message.role === 'assistant' && isStreaming}<span class="cursor">▌</span>{/if}</p>
+        </div>
+      {/each}
+    </div>
+  </div>
+
+  {#if !stickToBottom.isNearBottom}
+    <button
+      class="scroll-btn"
+      onclick={() => stickToBottom.scrollToBottom('instant')}
+    >
+      Scroll to latest ↓
+    </button>
+  {/if}
+
+  <form onsubmit={(e) => { e.preventDefault(); sendMessage(); }} class="input-row">
+    <input bind:value={input} placeholder="Ask anything..." disabled={isStreaming} />
+    <button type="submit" disabled={isStreaming || !input.trim()}>Send</button>
+  </form>
+</div>
+```
+
+## Using `duration` to stay locked during a stream
+
+The `duration` option on `scrollToBottom` extends how long the scroll lock persists beyond reaching the bottom. Two forms are available:
+
+<AccordionGroup>
+  <Accordion title="duration: number — fixed millisecond hold">
+    Keeps the scroll lock active for an extra `n` milliseconds after reaching the bottom. Useful when you know roughly how long a stream will take, or when adding a short buffer after a burst of content:
+
+    ```typescript
+    stickToBottom.scrollToBottom({
+      animation: { damping: 0.7, stiffness: 0.05, mass: 1.25 },
+      duration: 2000, // Stay locked for 2 s after reaching the bottom
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="duration: Promise — lock for the lifetime of a stream">
+    Pass a `Promise<void>` (or any promise — its resolved value is ignored). The scroll lock releases when the promise settles. This is the recommended pattern for fetch-based streams and SSE connections because the lock lifetime matches the actual data flow exactly:
+
+    ```typescript
+    const streamPromise = fetch('/api/stream').then(consumeStream);
+
+    stickToBottom.scrollToBottom({
+      animation: { damping: 0.7, stiffness: 0.05, mass: 1.25 },
+      duration: streamPromise,
+    });
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## `duration: Promise` pattern in detail
+
+```typescript
+async function streamResponse(prompt: string) {
+  // 1. Create the assistant message placeholder
+  const assistantId = Date.now();
+  messages = [...messages, { id: assistantId, role: 'assistant', content: '' }];
+
+  // 2. Build a promise that resolves when the stream ends
+  const streamDone = fetch('/api/completions', {
+    method: 'POST',
+    body: JSON.stringify({ prompt }),
+  }).then(async (res) => {
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    let done = false;
+
+    while (!done) {
+      const chunk = await reader.read();
+      done = chunk.done;
+      if (!done) {
+        const token = dec.decode(chunk.value);
+        messages = messages.map((m) =>
+          m.id === assistantId ? { ...m, content: m.content + token } : m
+        );
+      }
+    }
+  });
+
+  // 3. Hand the promise to scrollToBottom
+  stickToBottom.scrollToBottom({
+    duration: streamDone,
+  });
+
+  await streamDone;
+}
+```
+
+The scroll lock automatically releases when `streamDone` settles, whether the stream finishes normally or throws an error.
+
+## Spring vs instant: trade-offs for streaming
+
+| Scenario | Recommended animation | Reason |
+| --- | --- | --- |
+| AI token-by-token generation | Spring (`stiffness: 0.05`, `mass: 1.25`) | Smooth continuous motion hides incremental jumps |
+| Rapid SSE bursts (many events/s) | Spring with `duration: Promise` | Single animation held open avoids re-triggering |
+| Build log output | `'instant'` | No visual lag, immediate feedback is more important |
+| Final "jump to bottom" button | `'instant'` | User expects immediate response on click |
+
+For most AI streaming scenarios, the library defaults (`damping: 0.7`, `stiffness: 0.05`, `mass: 1.25`) work well. The spring naturally absorbs the rapid resize events triggered by each new token, producing a single fluid motion instead of a series of micro-jumps.
+
+## Custom target scroll position
+
+If you want the scroll target to stop short of the very bottom — for example, to leave space for a typing indicator pinned below the messages — use the `targetScrollTop` constructor option:
+
+```typescript
+const stickToBottom = new StickToBottom({
+  scrollElement: () => scrollElement,
+  contentElement: () => contentElement,
+
+  // Scroll to 60 px before the actual bottom to leave room for a pinned element
+  targetScrollTop: (defaultTarget) => defaultTarget - 60,
+});
+```
+
+The callback receives the default target (calculated as `scrollHeight - 1 - clientHeight`) and the element getter functions, and must return a number between `0` and `defaultTarget`.
+
+<Note>
+  `targetScrollTop` affects both auto-scroll and the `isNearBottom` threshold.
+  The `scrollDifference` used to determine `isNearBottom` is computed against the
+  `calculatedTargetScrollTop` — your custom target — not the raw bottom of the
+  container.
+</Note>

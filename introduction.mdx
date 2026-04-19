@@ -1,0 +1,43 @@
+---
+title: "stick-to-bottom-svelte overview and use cases"
+description: "stick-to-bottom-svelte is a Svelte 5 library for smart auto-scrolling. Learn what it does, when to use it, and how it handles user interaction automatically."
+---
+
+`stick-to-bottom-svelte` is a Svelte 5 library that keeps a scrollable container pinned to its bottom edge as new content arrives — and gets out of the way the moment a user scrolls up to read. It is a Svelte 5 port of StackBlitz's [`use-stick-to-bottom`](https://github.com/stackblitz/use-stick-to-bottom), exposing a single class-based API that wires up all the necessary observers, event listeners, and animation loops for you.
+
+## What it does
+
+Most scrollable containers that stream new content require you to manually call `scrollTop = scrollHeight` on every update. That naive approach ignores the user: if they scroll up to re-read something, the next update rudely snaps them back to the bottom. `stick-to-bottom-svelte` tracks whether the user is near the bottom of the container (within 70 px) and only auto-scrolls when they are. The moment a user scrolls up, auto-scroll pauses. It resumes automatically when they scroll back down to the bottom.
+
+Internally, the library attaches a `ResizeObserver` to your content element and `scroll`/`wheel` event listeners to your scroll element. When new content increases the content height, the library checks the user's position and, if appropriate, drives the container to the new bottom using a configurable spring-physics animation loop that targets 60 fps.
+
+## Common use cases
+
+<CardGroup cols={2}>
+  <Card title="Chat interfaces" icon="message">
+    Keep the latest message visible as a conversation grows, without interrupting a user who has scrolled up to find an earlier message.
+  </Card>
+  <Card title="Live log viewers" icon="terminal">
+    Tail streaming log output — system logs, CI pipelines, deployment traces — with instant or animated scrolling as new lines arrive.
+  </Card>
+  <Card title="Streaming content" icon="bolt">
+    Display token-by-token LLM output or any other streamed text that grows character by character without thrashing the scroll position.
+  </Card>
+  <Card title="Activity feeds" icon="satellite-dish">
+    Show real-time event or notification feeds where the newest entry should always be visible unless the user is browsing history.
+  </Card>
+</CardGroup>
+
+## Key concepts
+
+The library exports a single class: `StickToBottom`. You instantiate it once inside your component, passing getter functions for the scroll container element and its inner content element. Because the options use getter functions, the class can react to elements being bound after the instance is created — which fits naturally into Svelte 5's reactive model.
+
+```typescript
+import { StickToBottom } from 'stick-to-bottom-svelte';
+```
+
+The instance exposes reactive state properties (`isNearBottom`, `scrollTop`, `targetScrollTop`) that integrate directly with Svelte 5 runes, and two control methods: `scrollToBottom()` to programmatically trigger a scroll, and `stopScroll()` to pause auto-scrolling.
+
+<Note>
+  `stick-to-bottom-svelte` requires **Svelte 5**. It uses Svelte 5 runes (`$state`, `$effect`, `$state.snapshot`) and the `svelte/reactivity` module internally. It is not compatible with Svelte 4 or earlier.
+</Note>

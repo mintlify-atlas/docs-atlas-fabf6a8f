@@ -1,0 +1,212 @@
+---
+title: "Auto-scroll state machine and trigger logic"
+description: "Understand when stick-to-bottom-svelte starts, pauses, and resumes auto-scroll — including the 70px proximity threshold and resize handling."
+---
+
+The auto-scroll system in stick-to-bottom-svelte is driven by two boolean flags — `isAtBottomState` and `isNearBottomState` — that determine whether the container should follow new content as it arrives. Understanding how these flags change in response to scroll events, content resizes, and direct API calls gives you a clear mental model for predicting and controlling the library's behaviour.
+
+## State flags
+
+`isAtBottomState` is the primary lock. When `true`, every content resize that increases the container height triggers a scroll to the bottom. `isNearBottomState` acts as a secondary signal: it becomes `true` whenever the scroll difference drops to or below the proximity threshold, and is used to compute the public `isAtBottom` getter.
+
+```typescript
+get isAtBottom() {
+  return this.isAtBottomState || this.isNearBottomState;
+}
+```
+
+`escapedFromLockState` records whether the user has deliberately broken out of the lock. While `true`, resize events no longer trigger scrolling — the user is in control.
+
+## The 70px proximity threshold
+
+`STICK_TO_BOTTOM_OFFSET_PX = 70` defines how close to the bottom the container must be before the library considers it "near the bottom".
+
+```typescript
+private get internal_isNearBottom() {
+  return this.scrollDifference <= STICK_TO_BOTTOM_OFFSET_PX;
+}
+```
+
+`scrollDifference` is `calculatedTargetScrollTop - scrollTop`. When that value is 70 px or less, `isNearBottomState` is set to `true`. This tolerance prevents a single pixel of extra content from immediately triggering a re-lock.
+
+<Note>
+  The proximity check runs on every scroll event and every ResizeObserver
+  callback, so the state stays in sync even when the container height changes
+  without user interaction.
+</Note>
+
+## When auto-scroll activates
+
+<AccordionGroup>
+  <Accordion title="ResizeObserver detects a content height increase">
+    A `ResizeObserver` watches the content element. Whenever `height` increases
+    (`difference >= 0`), the library calls `scrollToBottom` with
+    `preserveScrollPosition: true`. This means the scroll only fires if
+    `isAtBottomState` is already `true` — content growth never forces the view
+    to jump if the user has scrolled away.
+
+    ```typescript
+    if (difference >= 0) {
+      const animation = mergeAnimations(
+        this.options,
+        previousHeight ? this.options.resize : this.options.initial
+      );
+
+      this.scrollToBottom({
+        animation,
+        wait: true,
+        preserveScrollPosition: true,
+        duration: animation === 'instant' ? undefined : RETAIN_ANIMATION_DURATION_MS
+      });
+    }
+    ```
+
+    On the very first resize, `previousHeight` is `undefined`, so
+    `options.initial` is used instead of `options.resize`.
+  </Accordion>
+
+  <Accordion title="scrollToBottom() called manually">
+    Calling `scrollToBottom()` directly always sets `isAtBottomState = true`
+    (unless `preserveScrollPosition` is passed), re-engaging the lock
+    regardless of where the user scrolled to. This is the primary escape hatch
+    for re-attaching auto-scroll from application code.
+  </Accordion>
+
+  <Accordion title="Initial mount">
+    The constructor sets `isAtBottomState = options.initial !== false`. Passing
+    `initial: false` disables the initial lock; any other value (including the
+    default, which is `undefined`) starts the container in the locked state.
+
+    The `initial` option also controls the animation used for the first content
+    resize. Pass `initial: 'instant'` to jump immediately on load, or a
+    `SpringAnimation` object to fine-tune the entrance.
+  </Accordion>
+</AccordionGroup>
+
+## When auto-scroll pauses
+
+<AccordionGroup>
+  <Accordion title="User scrolls up">
+    `handleScroll` runs inside a `setTimeout(1)` callback (see [scroll event
+    filtering](#scroll-event-filtering) below). When `scrollTop < lastScrollTop`,
+    `stopScroll()` is called:
+
+    ```typescript
+    stopScroll = () => {
+      this.escapedFromLockState = true;
+      this.isAtBottomState = false;
+    };
+    ```
+
+    Both flags flip simultaneously, fully releasing the lock.
+  </Accordion>
+
+  <Accordion title="User is selecting text">
+    If `mouseDown` is `true` and `window.getSelection()` returns a range that
+    overlaps the scroll element, `isSelecting()` returns `true`. During an
+    active animation this causes the frame loop to pause; during a scroll event
+    it calls `stopScroll()` directly.
+
+    ```typescript
+    private isSelecting = () => {
+      if (!mouseDown) return false;
+      const selection = window.getSelection();
+      if (!selection || !selection.rangeCount) return false;
+      const range = selection.getRangeAt(0);
+      const scrollRef = this.options.scrollElement();
+      if (!scrollRef) return false;
+      return (
+        range.commonAncestorContainer.contains(scrollRef) ||
+        scrollRef?.contains(range.commonAncestorContainer)
+      );
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="stopScroll() called programmatically">
+    Application code can call `stopScroll()` at any time. The effect is
+    identical to the user scrolling up: `escapedFromLockState = true` and
+    `isAtBottomState = false`. The animation loop also exits on the next frame
+    because `isAtBottomState` is checked at the top of each tick.
+  </Accordion>
+</AccordionGroup>
+
+## When auto-scroll resumes
+
+<Steps>
+  <Step title="User scrolls back down">
+    When `scrollTop > lastScrollTop`, `handleScroll` clears
+    `escapedFromLockState`. If `internal_isNearBottom` is also `true` at that
+    point, `isAtBottomState` flips back to `true`:
+
+    ```typescript
+    if (isScrollingDown) {
+      this.escapedFromLockState = false;
+    }
+
+    if (!this.escapedFromLockState && this.internal_isNearBottom) {
+      this.isAtBottomState = true;
+    }
+    ```
+  </Step>
+
+  <Step title="User reaches the 70px threshold">
+    The two conditions above fire together: once the user scrolls to within
+    70 px of the bottom, the lock re-engages automatically without any
+    additional API call.
+  </Step>
+
+  <Step title="scrollToBottom() overrides the escape">
+    Calling `scrollToBottom()` without `preserveScrollPosition` sets
+    `isAtBottomState = true` unconditionally, clearing the escaped state
+    implicitly because the animation loop checks `isAtBottomState` on every
+    frame.
+  </Step>
+</Steps>
+
+## Resize event handling
+
+The resize path branches on the sign of the height delta:
+
+| Resize direction | Behaviour |
+|------------------|-----------|
+| Positive (`difference >= 0`) | Calls `scrollToBottom` with `preserveScrollPosition: true`. Only scrolls if already at bottom. |
+| Negative (`difference < 0`) | Checks `internal_isNearBottom`. If `true`, clears `escapedFromLockState` and sets `isAtBottomState = true`. |
+
+A negative resize (e.g. content being removed) can shrink the container enough that the current `scrollTop` is effectively at the new bottom. The library detects this and re-engages the lock so the next content addition scrolls correctly.
+
+## Scroll event filtering
+
+Scroll events and ResizeObserver callbacks do not always arrive in a guaranteed order. The library works around this browser inconsistency using a `setTimeout(1)` guard inside `handleScroll`:
+
+```typescript
+setTimeout(() => {
+  if (this.resizeDifference || scrollTop === this.ignoreScrollToTop) {
+    this.ignoreScrollToTop = undefined;
+    return;
+  }
+  // ... direction detection and lock logic
+}, 1);
+```
+
+`resizeDifference` is set by the ResizeObserver before scroll events fire. If it is non-zero when the timeout runs, the scroll is treated as a side-effect of the resize and is ignored. `resizeDifference` is reset to `0` after a `requestAnimationFrame` + `setTimeout(1)` pair, ensuring it is cleared before the next genuine user scroll.
+
+`ignoreScrollToTop` is set by `setScrollTop` (the internal scroll setter used by the animation loop) to the exact `scrollTop` value that was programmatically applied. Any subsequent scroll event carrying that same value is discarded, preventing animation-driven scrolls from being misinterpreted as user input.
+
+## `preserveScrollPosition`
+
+When `preserveScrollPosition: true` is passed to `scrollToBottom`, the method skips the `isAtBottomState = true` assignment:
+
+```typescript
+if (!scrollOptions.preserveScrollPosition) {
+  this.isAtBottomState = true;
+}
+```
+
+This means the scroll only proceeds if the container is already locked. Resize events always pass this flag, so content growth never hijacks a user who has deliberately scrolled away.
+
+<Warning>
+  Setting `scrollElement.scrollTop` directly bypasses `ignoreScrollToTop` and
+  all the filtering logic above. Always use `scrollToBottom()` or `stopScroll()`
+  from application code to interact with the scroll position.
+</Warning>

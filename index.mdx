@@ -1,97 +1,90 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "stick-to-bottom-svelte: Smart Auto-Scroll for Svelte 5"
+description: "stick-to-bottom-svelte auto-scrolls Svelte 5 containers to the bottom when content arrives, with smart user-interaction detection and spring animations."
 ---
 
-## Setting up
+stick-to-bottom-svelte is a Svelte 5 library that keeps scrollable containers pinned to the bottom as new content arrives — while smartly pausing when the user scrolls up to read. Built on Svelte 5 runes, it gives you reactive state, physics-based spring animations, and full programmatic control with zero runtime dependencies beyond Svelte itself.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Install the package and add auto-scroll to your component in minutes
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="API Reference" icon="code" href="/api/stick-to-bottom">
+    Full reference for the StickToBottom class, options, and types
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Chat Interfaces" icon="message" href="/guides/chat-interfaces">
+    Build real-time chat with automatic scroll and user-controlled history
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Live Logs" icon="terminal" href="/guides/live-logs">
+    Stream log output and keep the latest entry always in view
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Key features
 
-Everything you need to create world-class documentation.
+<CardGroup cols={2}>
+  <Card title="Smart scroll detection" icon="eye">
+    Automatically pauses when users scroll up to read history, and resumes when they return to the bottom
+  </Card>
+  <Card title="Spring animations" icon="circle-nodes">
+    Physics-based scrolling with configurable damping, stiffness, and mass — or use instant mode
+  </Card>
+  <Card title="Reactive state" icon="bolt">
+    `isNearBottom`, `scrollTop`, and `targetScrollTop` are Svelte 5 reactive properties you can bind to UI
+  </Card>
+  <Card title="TypeScript ready" icon="file-code">
+    All interfaces and types are exported — `StickToBottomOptions`, `SpringAnimation`, `ScrollToBottomOptions`, and more
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Get started
 
-## Need inspiration?
+<Steps>
+  <Step title="Install the package">
+    Add stick-to-bottom-svelte to your Svelte 5 project using your preferred package manager.
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+    <CodeGroup>
+    ```bash npm
+    npm install stick-to-bottom-svelte
+    ```
+    ```bash pnpm
+    pnpm add stick-to-bottom-svelte
+    ```
+    ```bash yarn
+    yarn add stick-to-bottom-svelte
+    ```
+    </CodeGroup>
+  </Step>
+  <Step title="Create a StickToBottom instance">
+    Import the class and pass getter functions for your scroll and content elements.
+
+    ```svelte
+    <script lang="ts">
+      import { StickToBottom } from 'stick-to-bottom-svelte';
+
+      let scrollElement = $state<HTMLElement>();
+      let contentElement = $state<HTMLElement>();
+
+      const stickToBottom = new StickToBottom({
+        scrollElement: () => scrollElement,
+        contentElement: () => contentElement
+      });
+    </script>
+    ```
+  </Step>
+  <Step title="Bind your elements">
+    Attach `bind:this` to your scroll container and content wrapper. That's it — auto-scroll is active.
+
+    ```svelte
+    <div bind:this={scrollElement} class="h-96 overflow-y-auto">
+      <div bind:this={contentElement}>
+        <!-- your content here -->
+      </div>
+    </div>
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  Read the [Concepts](/concepts/auto-scroll-logic) section to understand exactly when auto-scroll activates, pauses, and resumes — useful for building reliable chat and log UIs.
+</Tip>

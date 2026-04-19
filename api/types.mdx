@@ -1,0 +1,198 @@
+---
+title: "TypeScript types exported by stick-to-bottom-svelte"
+description: "All exported TypeScript types from stick-to-bottom-svelte — SpringAnimation, Animation, ScrollToBottomOptions, GetTargetScrollTop, ScrollElements, and more."
+---
+
+stick-to-bottom-svelte is written in TypeScript and exports all its public interfaces and types. You can import them alongside the `StickToBottom` class to get full type safety in your components and helper functions.
+
+## SpringAnimation
+
+Controls the physics of the scroll animation. All fields are optional — omitted fields fall back to the instance-level defaults set in the constructor. Defined in source as `type SpringAnimation = Partial<typeof DEFAULT_SPRING_ANIMATION>`.
+
+```typescript
+type SpringAnimation = {
+  damping?: number;   // 0–1, default 0.7 — higher = less oscillation
+  stiffness?: number; // 0–1, default 0.05 — higher = faster
+  mass?: number;      // 0.5–3, default 1.25 — higher = more momentum
+}
+```
+
+<ParamField path="damping" type="number">
+  A value from 0 to 1 controlling how quickly oscillation dies out. `0` = no damping (bouncy), `1` = fully damped (no overshoot). Default: `0.7`.
+</ParamField>
+
+<ParamField path="stiffness" type="number">
+  A value from 0 to 1 controlling how fast the animation accelerates toward the target. Higher values feel snappier. Default: `0.05`.
+</ParamField>
+
+<ParamField path="mass" type="number">
+  Inertial mass of the animation. Higher values produce slower, heavier-feeling motion. Typical range: `0.5–3`. Default: `1.25`.
+</ParamField>
+
+## Animation
+
+The union type accepted wherever an animation can be specified — either a string shorthand or a `SpringAnimation` object.
+
+```typescript
+type Animation = ScrollBehavior | SpringAnimation
+// ScrollBehavior is the native browser type: 'instant' | 'auto' | 'smooth'
+```
+
+In practice, the most useful values are `'instant'` (immediate jump) and a `SpringAnimation` object. `ScrollBehavior` is the standard browser type — `'auto'` and `'smooth'` are accepted but the library only applies special handling to `'instant'`; any other string is treated as the default spring animation.
+
+## ScrollToBottomOptions
+
+Passed to `stickToBottom.scrollToBottom()`. Can be the string `'instant'` as a shorthand, or a full options object.
+
+```typescript
+type ScrollToBottomOptions =
+  | ScrollBehavior
+  | {
+      animation?: Animation;
+      wait?: boolean | number;
+      ignoreEscapes?: boolean;
+      preserveScrollPosition?: boolean;
+      duration?: number | Promise<void>;
+    };
+```
+
+<ParamField path="animation" type="Animation">
+  The animation to use for this scroll. Overrides the instance defaults for this call only. Pass `'instant'` or a `SpringAnimation` object.
+</ParamField>
+
+<ParamField path="wait" type="boolean | number">
+  When `true`, waits for any in-progress scroll to finish before starting. When a number, waits that many milliseconds. Default: `false`.
+</ParamField>
+
+<ParamField path="ignoreEscapes" type="boolean">
+  When `true`, prevents the user from interrupting this scroll by scrolling up with their mouse or touch. Default: `false`.
+</ParamField>
+
+<ParamField path="preserveScrollPosition" type="boolean">
+  When `true`, only scrolls to the bottom if the container is already at the bottom. Has no effect if the user has scrolled away. Default: `false`.
+</ParamField>
+
+<ParamField path="duration" type="number | Promise<void>">
+  Extra time in milliseconds (or until the promise resolves) to keep auto-scroll active after reaching the bottom. Useful for streaming content where new content bursts arrive. Default: `0`.
+</ParamField>
+
+### Example
+
+```typescript
+// Instant shorthand
+stickToBottom.scrollToBottom('instant');
+
+// Full options — smooth spring, locked against user escape, held for 500ms
+stickToBottom.scrollToBottom({
+  animation: { damping: 0.8, stiffness: 0.1, mass: 1.0 },
+  ignoreEscapes: true,
+  duration: 500
+});
+
+// Hold scroll for the lifetime of a streaming fetch
+const streamDone = fetch('/api/stream').then(() => {});
+stickToBottom.scrollToBottom({ duration: streamDone });
+```
+
+## GetTargetScrollTop
+
+A callback that lets you override where the "bottom" position is calculated. Returned value is clamped between `0` and the natural `targetScrollTop`.
+
+```typescript
+type GetTargetScrollTop = (
+  targetScrollTop: number,
+  context: ScrollElements
+) => number;
+```
+
+### Example
+
+```typescript
+// Scroll to 50px before the true bottom
+const stickToBottom = new StickToBottom({
+  scrollElement: () => scrollElement,
+  contentElement: () => contentElement,
+  targetScrollTop: (defaultTarget) => defaultTarget - 50
+});
+```
+
+## ScrollElements
+
+Holds getter functions for the two required DOM elements. Passed as the `context` argument to `GetTargetScrollTop`.
+
+```typescript
+interface ScrollElements {
+  scrollElement: () => HTMLElement | null | undefined;
+  contentElement: () => HTMLElement | null | undefined;
+}
+```
+
+## StickToBottomOptions
+
+The full options interface accepted by the `StickToBottom` constructor. Extends both `SpringAnimation` and `ScrollElements`.
+
+```typescript
+interface StickToBottomOptions extends SpringAnimation, ScrollElements {
+  resize?: Animation;
+  initial?: Animation | boolean;
+  targetScrollTop?: GetTargetScrollTop;
+}
+```
+
+See [StickToBottomOptions](/api/options) for detailed documentation of each field.
+
+## ScrollToBottom
+
+A function type matching the signature of the `scrollToBottom` method. Useful when passing the method as a callback.
+
+```typescript
+type ScrollToBottom = (scrollOptions?: ScrollToBottomOptions) => Promise<boolean> | boolean;
+```
+
+## StopScroll
+
+A function type matching the signature of the `stopScroll` method.
+
+```typescript
+type StopScroll = () => void;
+```
+
+## StickToBottomAnimationState
+
+Internal state for the currently-running animation. Exposed as an exported type for advanced integrations.
+
+```typescript
+interface StickToBottomAnimationState {
+  behavior: 'instant' | Required<SpringAnimation>;
+  ignoreEscapes: boolean;
+  promise: Promise<boolean>;
+}
+```
+
+## StickToBottomState
+
+The full internal state snapshot type. Exported for reference but not typically used in application code.
+
+```typescript
+interface StickToBottomState {
+  scrollTop: number;
+  lastScrollTop?: number;
+  ignoreScrollToTop?: number;
+  targetScrollTop: number;
+  calculatedTargetScrollTop: number;
+  scrollDifference: number;
+  resizeDifference: number;
+  animation?: StickToBottomAnimationState;
+  lastTick?: number;
+  velocity: number;
+  accumulated: number;
+  escapedFromLockState: boolean;
+  isAtBottomState: boolean;
+  isNearBottom: boolean;
+  resizeObserver?: ResizeObserver;
+}
+```
+
+<Note>
+  `StickToBottomState` describes the library's internal state. The reactive properties you should use in your components are the public getters on the class instance: `isNearBottom`, `isAtBottom`, `escapedFromLock`, `scrollTop`, `targetScrollTop`, and `scrollDifference`.
+</Note>

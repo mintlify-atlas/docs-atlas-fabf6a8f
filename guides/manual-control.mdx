@@ -1,0 +1,251 @@
+---
+title: "Programmatic auto-scroll control in Svelte 5"
+description: "Use scrollToBottom(), stopScroll(), and reactive state to build custom scroll buttons, status indicators, and fine-grained auto-scroll control in Svelte 5."
+---
+
+Most auto-scroll behavior happens without any direct calls to the API — the library responds to content resize events automatically. There are situations, however, where you need direct control: a "jump to latest" button, a programmatic pause on a keyboard shortcut, a status bar that reflects whether the user is following live output, or a custom animation triggered by application logic. `stick-to-bottom-svelte` exposes a small, focused API for all of these cases through the `StickToBottom` class instance.
+
+## Setting up
+
+```svelte
+<script lang="ts">
+  import { StickToBottom } from 'stick-to-bottom-svelte';
+
+  let scrollElement = $state<HTMLElement>();
+  let contentElement = $state<HTMLElement>();
+
+  const stickToBottom = new StickToBottom({
+    scrollElement: () => scrollElement,
+    contentElement: () => contentElement,
+  });
+</script>
+
+<div bind:this={scrollElement} class="h-96 overflow-y-auto">
+  <div bind:this={contentElement}>
+    <!-- content -->
+  </div>
+</div>
+```
+
+## `scrollToBottom()`
+
+Scrolls to the bottom and re-enables auto-scroll. Returns a `Promise<boolean>` that resolves to `true` if the scroll completed, or `false` if it was interrupted.
+
+```typescript
+stickToBottom.scrollToBottom(options?: ScrollToBottomOptions): Promise<boolean> | boolean
+```
+
+You can call it with a shorthand string or a full options object:
+
+```typescript
+// Shorthand: instant jump
+stickToBottom.scrollToBottom('instant');
+
+// Shorthand: spring animation with constructor defaults
+stickToBottom.scrollToBottom({});
+
+// Full options object
+stickToBottom.scrollToBottom({
+  animation: { damping: 0.9, stiffness: 0.1, mass: 0.8 },
+  wait: false,
+  ignoreEscapes: false,
+  preserveScrollPosition: false,
+  duration: 500,
+});
+```
+
+### All `scrollToBottom` options
+
+<AccordionGroup>
+  <Accordion title="animation">
+    Controls how the scroll moves to the bottom. Accepts `'instant'` for an immediate jump, or a spring configuration object with any combination of `damping`, `stiffness`, and `mass`. Omitting this option inherits the spring values set on the constructor.
+
+    ```typescript
+    // Instant jump
+    stickToBottom.scrollToBottom({ animation: 'instant' });
+
+    // Custom spring
+    stickToBottom.scrollToBottom({
+      animation: { damping: 0.9, stiffness: 0.1, mass: 0.8 },
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="wait">
+    When `true`, waits for any in-progress scroll animation to finish before starting this one. When passed a number, waits that many milliseconds before scrolling. Defaults to `false`.
+
+    ```typescript
+    // Wait for the current animation to finish
+    stickToBottom.scrollToBottom({ wait: true });
+
+    // Wait 300 ms, then scroll
+    stickToBottom.scrollToBottom({ wait: 300 });
+    ```
+  </Accordion>
+
+  <Accordion title="ignoreEscapes">
+    When `true`, prevents the user from interrupting the scroll by scrolling up with their mouse or trackpad during the animation. Use sparingly — overriding user intent is generally unwelcome.
+
+    ```typescript
+    stickToBottom.scrollToBottom({ ignoreEscapes: true });
+    ```
+  </Accordion>
+
+  <Accordion title="preserveScrollPosition">
+    When `true`, only scrolls if the user is already near the bottom. If the user has scrolled up to read history, the call is a no-op. This is the right option for calls triggered by content changes (resize events, new items) rather than explicit user actions.
+
+    ```typescript
+    stickToBottom.scrollToBottom({ preserveScrollPosition: true });
+    ```
+  </Accordion>
+
+  <Accordion title="duration">
+    Extends how long the scroll lock stays active after reaching the bottom. Accepts a number (milliseconds) or a `Promise`. When a `Promise` is passed, the lock releases when the promise settles — ideal for keeping the container anchored for the duration of a fetch or SSE stream.
+
+    ```typescript
+    // Keep locked for 1 s after reaching the bottom
+    stickToBottom.scrollToBottom({ duration: 1000 });
+
+    // Keep locked for the lifetime of a stream
+    const streamPromise = fetch('/api/stream').then(handleStream);
+    stickToBottom.scrollToBottom({ duration: streamPromise });
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## `stopScroll()`
+
+Stops auto-scrolling immediately and marks the instance as "escaped from lock". Equivalent to the user scrolling up manually. The next call to `scrollToBottom()` or user scroll back to the bottom clears this state.
+
+```typescript
+stickToBottom.stopScroll(): void
+```
+
+```svelte
+<button onclick={() => stickToBottom.stopScroll()}>
+  Pause auto-scroll
+</button>
+```
+
+## Reactive state properties
+
+All properties below are reactive Svelte 5 state. Reading them inside `$derived`, `$effect`, or a template expression automatically creates a dependency.
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `isNearBottom` | `boolean` | `true` when scroll position is within 70 px of the bottom. Auto-scroll is active when this is `true`. |
+| `isAtBottom` | `boolean` | `true` when `isAtBottomState` or `isNearBottom` is `true`. More permissive than `isNearBottom`. |
+| `escapedFromLock` | `boolean` | `true` after the user (or `stopScroll()`) has interrupted auto-scroll. Cleared when the user scrolls back near the bottom or `scrollToBottom()` is called. |
+| `scrollTop` | `number` | Current `scrollTop` of the scroll element. Updated on every scroll and wheel event. |
+| `targetScrollTop` | `number` | The computed scroll target (`scrollHeight - 1 - clientHeight`). Equals the maximum scrollable position. |
+
+## Building a "scroll to bottom" floating button
+
+Combine `isNearBottom` with `scrollToBottom` to build the standard floating button pattern:
+
+```svelte
+<script lang="ts">
+  import { StickToBottom } from 'stick-to-bottom-svelte';
+
+  let scrollElement = $state<HTMLElement>();
+  let contentElement = $state<HTMLElement>();
+
+  const stickToBottom = new StickToBottom({
+    scrollElement: () => scrollElement,
+    contentElement: () => contentElement,
+    damping: 0.7,
+    stiffness: 0.08,
+    mass: 1.2,
+  });
+</script>
+
+<div class="relative">
+  <div bind:this={scrollElement} class="h-96 overflow-y-auto">
+    <div bind:this={contentElement}>
+      <!-- content -->
+    </div>
+  </div>
+
+  {#if !stickToBottom.isNearBottom}
+    <button
+      class="absolute bottom-4 right-4 rounded-full bg-blue-500 px-4 py-2 text-white shadow-lg"
+      onclick={() => stickToBottom.scrollToBottom({
+        animation: { damping: 0.7, stiffness: 0.08, mass: 1.2 }
+      })}
+    >
+      ↓ Latest
+    </button>
+  {/if}
+</div>
+```
+
+## Building a scroll status indicator
+
+Use all three boolean properties to build a status bar that gives users clear feedback about the auto-scroll state:
+
+```svelte
+<div class="status-bar">
+  {#if stickToBottom.isNearBottom}
+    <span class="status status--active">Live — auto-scrolling</span>
+  {:else if stickToBottom.escapedFromLock}
+    <span class="status status--paused">Paused — reading history</span>
+  {:else}
+    <span class="status status--idle">Scrolled up</span>
+  {/if}
+
+  <span class="scroll-position">
+    {stickToBottom.scrollTop}px / {stickToBottom.targetScrollTop}px
+  </span>
+</div>
+```
+
+## Reacting to scroll state changes with `$effect`
+
+Use `$effect` to run side effects whenever scroll state changes — for example, to fetch missed messages when the user returns to the bottom, or to update an external store:
+
+```svelte
+<script lang="ts">
+  $effect(() => {
+    if (stickToBottom.isNearBottom) {
+      // User is following live output — mark all messages as read
+      markAllRead();
+    }
+  });
+
+  $effect(() => {
+    if (stickToBottom.escapedFromLock) {
+      // User scrolled up — could fetch older history here
+      console.log('User is reading history at', stickToBottom.scrollTop, 'px');
+    }
+  });
+</script>
+```
+
+<Warning>
+  Avoid calling `scrollToBottom()` unconditionally inside a `$effect` that
+  depends on `isNearBottom` or `scrollTop`. This can create a feedback loop
+  where the scroll triggers the effect which triggers another scroll. Guard such
+  calls with a condition that is only true when the scroll is actually needed,
+  or use `preserveScrollPosition: true`.
+</Warning>
+
+## Combining manual control with keyboard shortcuts
+
+```svelte
+<script lang="ts">
+  function handleKeydown(event: KeyboardEvent) {
+    // End key: jump to bottom and re-enable auto-scroll
+    if (event.key === 'End' && event.ctrlKey) {
+      event.preventDefault();
+      stickToBottom.scrollToBottom({ animation: 'instant' });
+    }
+
+    // Escape: pause auto-scroll
+    if (event.key === 'Escape') {
+      stickToBottom.stopScroll();
+    }
+  }
+</script>
+
+<svelte:window onkeydown={handleKeydown} />
+```

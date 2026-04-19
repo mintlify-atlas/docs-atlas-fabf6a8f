@@ -1,0 +1,207 @@
+---
+title: "How user scroll and selection are detected"
+description: "How stick-to-bottom-svelte detects scroll direction, text selection, and mouse state to intelligently pause and resume auto-scroll."
+---
+
+stick-to-bottom-svelte is designed to get out of the user's way the moment they reach for the scroll bar, and to re-engage silently the moment they scroll back down. This page explains the three detection mechanisms — scroll direction, mouse state, and event filtering — that make that behaviour reliable across browsers.
+
+## Scroll direction detection
+
+Every `wheel` and `scroll` event on the scroll element is forwarded to `handleScroll`. Inside the `setTimeout(1)` callback (explained below), the handler compares the current `scrollTop` against `lastScrollTop` to determine direction:
+
+```typescript
+const isScrollingDown = scrollTop > this.lastScrollTop;
+const isScrollingUp   = scrollTop < this.lastScrollTop;
+
+this.lastScrollTop = scrollTop;
+```
+
+- **Scrolling up** calls `stopScroll()`, which sets `escapedFromLockState = true` and `isAtBottomState = false`.
+- **Scrolling down** clears `escapedFromLockState`. If `internal_isNearBottom` is also `true`, `isAtBottomState` flips back to `true`, re-engaging the lock.
+
+```typescript
+if (isScrollingUp) {
+  this.stopScroll();
+}
+
+if (isScrollingDown) {
+  this.escapedFromLockState = false;
+}
+
+if (!this.escapedFromLockState && this.internal_isNearBottom) {
+  this.isAtBottomState = true;
+}
+```
+
+<Note>
+  The 70px proximity threshold (`STICK_TO_BOTTOM_OFFSET_PX`) applies here: the
+  lock only re-engages when `scrollDifference <= 70`. Scrolling down but
+  stopping short of the threshold clears `escapedFromLockState` without yet
+  re-locking, so the next content resize will not auto-scroll.
+</Note>
+
+## Mouse state tracking
+
+A module-level `mouseDown` reactive variable tracks whether any mouse button is currently held:
+
+```typescript
+let mouseDown = $state(false);
+
+document.addEventListener('mousedown', () => { mouseDown = true; });
+document.addEventListener('mouseup',   () => { mouseDown = false; });
+document.addEventListener('click',     () => { mouseDown = false; });
+```
+
+These listeners are registered at module load time (once per page), not per instance. The `click` listener is a safety net for cases where `mouseup` fires outside the document (e.g. the user releases the button over a browser chrome element).
+
+### Text selection detection
+
+`isSelecting()` uses `mouseDown` combined with the Selection API to detect whether the user is dragging a selection inside the scroll container:
+
+```typescript
+private isSelecting = () => {
+  if (!mouseDown) return false;
+
+  const selection = window.getSelection();
+  if (!selection || !selection.rangeCount) return false;
+
+  const range = selection.getRangeAt(0);
+  const scrollRef = this.options.scrollElement();
+  if (!scrollRef) return false;
+
+  return (
+    range.commonAncestorContainer.contains(scrollRef) ||
+    scrollRef?.contains(range.commonAncestorContainer)
+  );
+};
+```
+
+The bidirectional containment check (`contains(scrollRef) || scrollRef.contains(...)`) handles both selections that span the entire scroll element and selections that start inside it. If either condition is true, auto-scroll is paused for the duration of the drag.
+
+`isSelecting()` is checked in two places:
+
+1. **Inside the animation loop** — if `true`, the frame returns `next()` without advancing the scroll position, effectively pausing animation while the user drags.
+2. **Inside `handleScroll`** — if `true`, `stopScroll()` is called, releasing the lock entirely.
+
+## Scroll event filtering
+
+### The `setTimeout(1)` trick
+
+Browsers do not guarantee the order in which ResizeObserver callbacks and scroll events fire. Content that is appended to the DOM may trigger a ResizeObserver callback first, causing the library to programmatically scroll down — but the corresponding scroll event may arrive before or after that callback runs.
+
+To avoid treating a programmatic scroll as user input, `handleScroll` defers its direction-detection logic by 1 ms:
+
+```typescript
+private handleScroll = ({ target }: Event) => {
+  // ...
+
+  setTimeout(() => {
+    if (this.resizeDifference || scrollTop === this.ignoreScrollToTop) {
+      this.ignoreScrollToTop = undefined;
+      return;
+    }
+
+    // direction detection happens here
+  }, 1);
+};
+```
+
+By the time the timeout fires, `resizeDifference` has been set by the ResizeObserver callback if a resize was the root cause. A non-zero `resizeDifference` causes the handler to bail out early.
+
+For the spec behind this race condition, see the [WICG ResizeObserver issue #25](https://github.com/WICG/resize-observer/issues/25#issuecomment-248757228).
+
+### The `ignoreScrollToTop` mechanism
+
+When the animation loop writes to `scrollElement.scrollTop` via `setScrollTop`, it records the value it wrote:
+
+```typescript
+private setScrollTop(scrollTop: number) {
+  const scrollRef = this.options.scrollElement();
+  if (!scrollRef) return;
+  scrollRef.scrollTop = scrollTop;
+  this.ignoreScrollToTop = scrollRef.scrollTop; // actual value after clamping
+}
+```
+
+The value is read back from the element (not from the argument) to account for browser clamping. When the subsequent scroll event arrives, `handleScroll` compares `scrollTop === this.ignoreScrollToTop` and discards the event if they match:
+
+```typescript
+if (this.resizeDifference || scrollTop === this.ignoreScrollToTop) {
+  this.ignoreScrollToTop = undefined;
+  return;
+}
+```
+
+There is one subtle edge case: if the user scrolls up at the exact moment an animation frame fires, the two events may arrive interleaved. The library handles this by updating `lastScrollTop` to the ignored value before the timeout runs:
+
+```typescript
+if (this.ignoreScrollToTop && this.ignoreScrollToTop > scrollTop) {
+  this.lastScrollTop = this.ignoreScrollToTop;
+}
+```
+
+This ensures the direction comparison (`scrollTop < lastScrollTop`) is computed against the animation frame's position, not the previous user-initiated position.
+
+## The `ignoreEscapes` option
+
+`scrollToBottom` accepts an `ignoreEscapes` flag that prevents the user from overriding the scroll during the animation:
+
+```typescript
+if (this.animation?.ignoreEscapes) {
+  this.setScrollTop(this.lastScrollTop);
+  return;
+}
+```
+
+When `ignoreEscapes` is `true` and a scroll event arrives, the handler writes `lastScrollTop` back to the element, effectively undoing the user's scroll input. This is useful for forced onboarding flows or confirmation dialogs where the view must reach the bottom before the user can proceed.
+
+<Warning>
+  `ignoreEscapes` overrides user intent completely. Use it only in contexts
+  where preventing scroll is explicitly expected, such as a terms-of-service
+  modal that requires reading to the end.
+</Warning>
+
+## Reactive scroll position with `createSubscriber`
+
+The `scrollTop` and related getters use Svelte 5's `createSubscriber` to integrate with the reactivity system:
+
+```typescript
+this.subscribe = createSubscriber((update) => {
+  scrollRef.addEventListener('wheel', update, { passive: true });
+  scrollRef.addEventListener('scroll', update, { passive: true });
+
+  return () => {
+    scrollRef.removeEventListener('wheel', update);
+    scrollRef.removeEventListener('scroll', update);
+  };
+});
+```
+
+Any Svelte `$derived` or `$effect` that reads `scrollTop`, `scrollDifference`, or `isAtBottom` will automatically re-run when the scroll position changes. The subscriber is torn down when all dependent effects are destroyed, avoiding listener leaks.
+
+## Common pitfalls
+
+<AccordionGroup>
+  <Accordion title="Setting scrollTop directly outside the library">
+    Bypassing the library's `setScrollTop` means `ignoreScrollToTop` is never
+    set. The resulting scroll event will be treated as user input and may call
+    `stopScroll()`, releasing the lock unexpectedly. Always use `scrollToBottom()`
+    or `stopScroll()` from application code.
+  </Accordion>
+
+  <Accordion title="Touch devices and selection detection">
+    `isSelecting()` relies on `mouseDown`, which is driven by `mousedown`/
+    `mouseup` events. On touch-only devices these events may not fire. Text
+    selection on mobile will not pause the animation loop. If your target
+    audience is primarily mobile, consider using `ignoreEscapes: false` (the
+    default) and letting the touch scroll events drive direction detection
+    instead.
+  </Accordion>
+
+  <Accordion title="Multiple instances on the same page">
+    The `mouseDown` state is module-level and shared across all instances. This
+    is intentional — text selection awareness works globally. However, the
+    `isSelecting()` check scopes containment to each instance's own
+    `scrollElement`, so different containers do not interfere with each other.
+  </Accordion>
+</AccordionGroup>

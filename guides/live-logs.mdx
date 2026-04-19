@@ -1,0 +1,217 @@
+---
+title: "Display live logs with stick-to-bottom-svelte"
+description: "Keep streaming log output anchored to the latest entry using instant scrolling — ideal for build logs, server output, and debugging consoles."
+---
+
+Log viewers are different from chat interfaces: lines arrive continuously, often many times per second, and users care most about seeing the latest output as fast as possible. Smooth spring animations add latency that gets in the way of that goal. `stick-to-bottom-svelte` lets you switch to instant (jump-cut) scrolling for both the initial scroll and subsequent resize-driven scrolls, keeping the viewport locked to the newest line without any animation overhead.
+
+## Full log viewer example
+
+The component below streams log entries on an interval and keeps the container anchored to the latest line. Setting both `initial` and `resize` to `'instant'` means every new line causes an immediate position update — no easing, no delay.
+
+```svelte LogViewer.svelte
+<script lang="ts">
+  import { StickToBottom } from 'stick-to-bottom-svelte';
+  import { onMount, onDestroy } from 'svelte';
+
+  type LogEntry = {
+    id: number;
+    level: 'info' | 'warn' | 'error';
+    message: string;
+    timestamp: string;
+  };
+
+  let logs = $state<LogEntry[]>([]);
+  let scrollElement = $state<HTMLElement>();
+  let contentElement = $state<HTMLElement>();
+  let logInterval: ReturnType<typeof setInterval>;
+
+  const stickToBottom = new StickToBottom({
+    scrollElement: () => scrollElement,
+    contentElement: () => contentElement,
+    // Instant scroll on first load and on every new line
+    initial: 'instant',
+    resize: 'instant',
+  });
+
+  function appendLog(level: LogEntry['level'], message: string) {
+    logs = [
+      ...logs,
+      { id: Date.now(), level, message, timestamp: new Date().toISOString() },
+    ];
+  }
+
+  onMount(() => {
+    logInterval = setInterval(() => {
+      const levels: LogEntry['level'][] = ['info', 'info', 'info', 'warn', 'error'];
+      const level = levels[Math.floor(Math.random() * levels.length)];
+      appendLog(level, `Log entry at ${new Date().toISOString()}`);
+    }, 200);
+  });
+
+  onDestroy(() => clearInterval(logInterval));
+</script>
+
+<div class="log-viewer-wrapper">
+  <div class="log-toolbar">
+    <span>Live output</span>
+    <!-- Pause indicator: user scrolled up to read history -->
+    {#if !stickToBottom.isNearBottom}
+      <span class="paused-badge">Auto-scroll paused</span>
+      <button onclick={() => stickToBottom.scrollToBottom('instant')}>
+        Resume ↓
+      </button>
+    {/if}
+  </div>
+
+  <!-- Scrollable viewport -->
+  <div bind:this={scrollElement} class="log-scroll-area">
+    <!-- Content wrapper observed for resize events -->
+    <div bind:this={contentElement} class="log-content">
+      {#each logs as entry (entry.id)}
+        <div class="log-line log-line--{entry.level}">
+          <span class="log-timestamp">{entry.timestamp}</span>
+          <span class="log-level">[{entry.level.toUpperCase()}]</span>
+          <span class="log-message">{entry.message}</span>
+        </div>
+      {/each}
+    </div>
+  </div>
+</div>
+```
+
+## Setting up the log viewer
+
+<Steps>
+  <Step title="Install the package">
+    ```bash
+    pnpm add stick-to-bottom-svelte
+    ```
+  </Step>
+
+  <Step title="Create element references">
+    The outer element is the scrollable viewport; the inner element wraps all log lines and is observed by a `ResizeObserver`:
+
+    ```svelte
+    let scrollElement = $state<HTMLElement>();
+    let contentElement = $state<HTMLElement>();
+    ```
+
+    ```svelte
+    <div bind:this={scrollElement} class="h-screen overflow-y-auto font-mono text-sm">
+      <div bind:this={contentElement}>
+        {#each logs as entry (entry.id)}
+          <div>[{entry.level}] {entry.message}</div>
+        {/each}
+      </div>
+    </div>
+    ```
+  </Step>
+
+  <Step title="Configure instant scrolling">
+    Pass `initial: 'instant'` and `resize: 'instant'` to bypass spring physics entirely:
+
+    ```typescript
+    const stickToBottom = new StickToBottom({
+      scrollElement: () => scrollElement,
+      contentElement: () => contentElement,
+      initial: 'instant',
+      resize: 'instant',
+    });
+    ```
+  </Step>
+
+  <Step title="Append log entries">
+    Add entries to the reactive array. The `ResizeObserver` detects the height change and immediately scrolls if the user is near the bottom:
+
+    ```typescript
+    function appendLog(level: string, message: string) {
+      logs = [...logs, { id: Date.now(), level, message, timestamp: new Date().toISOString() }];
+    }
+    ```
+  </Step>
+</Steps>
+
+## Why instant scroll is better for logs
+
+Spring animations introduce a settling period that creates visible lag when log lines arrive faster than the animation can complete. With instant scrolling:
+
+- The viewport jumps to the new bottom on every frame — no queue of pending animations builds up.
+- CPU cost is lower: no per-frame physics calculation.
+- Users get accurate, up-to-the-millisecond output, which is critical when debugging time-sensitive issues.
+
+<CodeGroup>
+
+```svelte Instant (recommended for logs)
+const stickToBottom = new StickToBottom({
+  scrollElement: () => scrollElement,
+  contentElement: () => contentElement,
+  initial: 'instant',
+  resize: 'instant',
+});
+```
+
+```svelte Spring (better for chat)
+const stickToBottom = new StickToBottom({
+  scrollElement: () => scrollElement,
+  contentElement: () => contentElement,
+  damping: 0.7,
+  stiffness: 0.08,
+  mass: 1.2,
+});
+```
+
+</CodeGroup>
+
+## Handling very fast log streams
+
+When logs arrive faster than 60 fps, `stick-to-bottom-svelte` batches scroll updates to one per animation frame, preventing layout thrashing. You do not need to throttle your log appends — just push entries as they arrive:
+
+```typescript
+// Safe to call at any rate; the library batches at 60 fps
+socket.addEventListener('message', (event) => {
+  const line = JSON.parse(event.data);
+  logs = [...logs, { id: Date.now(), ...line }];
+});
+```
+
+For extremely high-volume streams (thousands of lines per second), consider keeping a fixed-size buffer to limit DOM node count:
+
+```typescript
+const MAX_LOG_LINES = 5000;
+
+function appendLog(entry: LogEntry) {
+  logs = [...logs.slice(-MAX_LOG_LINES + 1), entry];
+}
+```
+
+<Tip>
+  Use `preserveScrollPosition: true` when calling `scrollToBottom` from controls
+  like a "clear" button or a filter toggle. This ensures the scroll only fires
+  if the user was already at the bottom, leaving them undisturbed if they paused
+  to inspect a specific line.
+
+  ```typescript
+  stickToBottom.scrollToBottom({
+    animation: 'instant',
+    preserveScrollPosition: true,
+  });
+  ```
+</Tip>
+
+## Pausing and resuming from the toolbar
+
+`isNearBottom` lets you surface a clear "auto-scroll paused" indicator whenever the user scrolls up. Call `scrollToBottom('instant')` to snap back:
+
+```svelte
+{#if !stickToBottom.isNearBottom}
+  <div class="pause-banner">
+    <span>Auto-scroll paused — reading history</span>
+    <button onclick={() => stickToBottom.scrollToBottom('instant')}>
+      Resume live output ↓
+    </button>
+  </div>
+{/if}
+```
+
+Auto-scroll resumes automatically once the user scrolls back within 70 px of the bottom, so the button is only necessary for users who want to jump there without scrolling manually.

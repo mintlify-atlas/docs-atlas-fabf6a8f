@@ -1,0 +1,253 @@
+---
+title: "Build chat interfaces with stick-to-bottom-svelte"
+description: "Learn how to implement a real-time chat UI that auto-scrolls to new messages while letting users scroll up to read chat history without interruption."
+---
+
+Chat interfaces need to keep users anchored to the latest message without forcing them away from history they are actively reading. `stick-to-bottom-svelte` handles this automatically: when a new message arrives, the container scrolls to the bottom only if the user is already near the bottom. If the user has scrolled up to read earlier messages, auto-scroll pauses and resumes the moment they scroll back down.
+
+## Full chat component example
+
+The example below shows a complete chat component. Two element references — one for the scrollable viewport (`scrollElement`) and one for the content wrapper (`contentElement`) — are passed to `StickToBottom` as getter functions. The library observes both elements and manages all scroll logic reactively through Svelte 5 runes.
+
+```svelte Chat.svelte
+<script lang="ts">
+  import { StickToBottom } from 'stick-to-bottom-svelte';
+
+  type Message = {
+    id: number;
+    text: string;
+    timestamp: Date;
+    type: 'user' | 'system';
+  };
+
+  let messages = $state<Message[]>([]);
+  let newMessage = $state('');
+  let scrollElement = $state<HTMLElement>();
+  let contentElement = $state<HTMLElement>();
+
+  const stickToBottom = new StickToBottom({
+    scrollElement: () => scrollElement,
+    contentElement: () => contentElement,
+    damping: 0.7,
+    stiffness: 0.08,
+    mass: 1.2,
+  });
+
+  function sendMessage() {
+    if (!newMessage.trim()) return;
+    messages = [
+      ...messages,
+      { id: Date.now(), text: newMessage, timestamp: new Date(), type: 'user' },
+    ];
+    newMessage = '';
+  }
+
+  // Call this from a WebSocket or SSE handler
+  function onIncomingMessage(text: string) {
+    messages = [
+      ...messages,
+      { id: Date.now(), text, timestamp: new Date(), type: 'system' },
+    ];
+    // Auto-scroll fires automatically when the user is near the bottom
+  }
+</script>
+
+<div class="chat-container">
+  <!-- Scrollable viewport -->
+  <div bind:this={scrollElement} class="messages-area">
+    <!-- Content wrapper observed by ResizeObserver -->
+    <div bind:this={contentElement}>
+      {#each messages as message (message.id)}
+        <div class="message {message.type}">
+          <span>{message.text}</span>
+          <time>{message.timestamp.toLocaleTimeString()}</time>
+        </div>
+      {/each}
+    </div>
+  </div>
+
+  <!-- "Scroll to bottom" button, shown only when reading history -->
+  {#if !stickToBottom.isNearBottom}
+    <button
+      class="scroll-to-bottom-btn"
+      onclick={() => stickToBottom.scrollToBottom({ animation: { damping: 0.7, stiffness: 0.08, mass: 1.2 } })}
+    >
+      New messages ↓
+    </button>
+  {/if}
+
+  <div class="input-area">
+    <input
+      bind:value={newMessage}
+      onkeydown={(e) => e.key === 'Enter' && sendMessage()}
+      placeholder="Type a message..."
+    />
+    <button onclick={sendMessage} disabled={!newMessage.trim()}>Send</button>
+  </div>
+</div>
+```
+
+## Setting up the component
+
+<Steps>
+  <Step title="Install the package">
+    ```bash
+    pnpm add stick-to-bottom-svelte
+    ```
+  </Step>
+
+  <Step title="Create element references">
+    Declare two `$state` variables — one for the scrollable outer element and one for the inner content wrapper:
+
+    ```svelte
+    let scrollElement = $state<HTMLElement>();
+    let contentElement = $state<HTMLElement>();
+    ```
+
+    Bind them in the template:
+
+    ```svelte
+    <div bind:this={scrollElement} class="h-96 overflow-y-auto">
+      <div bind:this={contentElement}>
+        <!-- messages here -->
+      </div>
+    </div>
+    ```
+  </Step>
+
+  <Step title="Instantiate StickToBottom">
+    Pass getter functions so the class can access the bound elements reactively:
+
+    ```svelte
+    <script lang="ts">
+      import { StickToBottom } from 'stick-to-bottom-svelte';
+
+      const stickToBottom = new StickToBottom({
+        scrollElement: () => scrollElement,
+        contentElement: () => contentElement,
+        damping: 0.7,
+        stiffness: 0.08,
+        mass: 1.2,
+      });
+    </script>
+    ```
+  </Step>
+
+  <Step title="Handle incoming messages">
+    Append to the messages array. The library's `ResizeObserver` detects the new content height and scrolls if the user is already near the bottom — no manual `scrollToBottom()` call required:
+
+    ```typescript
+    function onIncomingMessage(text: string) {
+      messages = [...messages, { id: Date.now(), text, timestamp: new Date(), type: 'system' }];
+    }
+    ```
+  </Step>
+</Steps>
+
+## Spring animation settings for chat
+
+The default spring values in the library (`damping: 0.7`, `stiffness: 0.05`, `mass: 1.25`) work well in most cases. For chat interfaces, slightly increasing stiffness and lowering mass gives snappier feedback while keeping the motion smooth:
+
+<CodeGroup>
+
+```svelte Recommended for chat
+const stickToBottom = new StickToBottom({
+  scrollElement: () => scrollElement,
+  contentElement: () => contentElement,
+  damping: 0.7,
+  stiffness: 0.08,
+  mass: 1.2,
+});
+```
+
+```svelte Library defaults
+const stickToBottom = new StickToBottom({
+  scrollElement: () => scrollElement,
+  contentElement: () => contentElement,
+  // damping: 0.7  (default)
+  // stiffness: 0.05  (default)
+  // mass: 1.25  (default)
+});
+```
+
+</CodeGroup>
+
+| Parameter  | Default | Chat recommendation | Effect                                      |
+| ---------- | ------- | ------------------- | ------------------------------------------- |
+| `damping`  | `0.7`   | `0.7`               | Controls oscillation — keep near 1 for chat |
+| `stiffness`| `0.05`  | `0.08`              | Higher = reaches bottom faster              |
+| `mass`     | `1.25`  | `1.2`               | Lower = lighter, snappier feel              |
+
+## Handling WebSocket and SSE streams
+
+For real-time connections, call your message handler from the relevant event listener. The library takes care of the rest:
+
+<CodeGroup>
+
+```svelte WebSocket
+<script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
+
+  let ws: WebSocket;
+
+  onMount(() => {
+    ws = new WebSocket('wss://your-server/chat');
+    ws.addEventListener('message', (event) => {
+      const data = JSON.parse(event.data);
+      messages = [...messages, { id: Date.now(), ...data }];
+    });
+  });
+
+  onDestroy(() => ws?.close());
+</script>
+```
+
+```svelte Server-Sent Events
+<script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
+
+  let source: EventSource;
+
+  onMount(() => {
+    source = new EventSource('/api/chat/stream');
+    source.addEventListener('message', (event) => {
+      const data = JSON.parse(event.data);
+      messages = [...messages, { id: Date.now(), ...data }];
+    });
+  });
+
+  onDestroy(() => source?.close());
+</script>
+```
+
+</CodeGroup>
+
+## Showing a "scroll to bottom" button
+
+Use `stickToBottom.isNearBottom` to show a call-to-action when the user has scrolled away from the latest messages. The property is reactive and updates automatically as the user scrolls:
+
+```svelte
+{#if !stickToBottom.isNearBottom}
+  <button
+    class="floating-scroll-btn"
+    onclick={() => stickToBottom.scrollToBottom({
+      animation: { damping: 0.7, stiffness: 0.08, mass: 1.2 }
+    })}
+  >
+    Jump to latest ↓
+  </button>
+{/if}
+```
+
+`isNearBottom` is `true` whenever the scroll position is within 70 px of the bottom. The button disappears the moment the user scrolls close enough, keeping the UI clean.
+
+<Tip>
+  Pass `preserveScrollPosition: true` to `scrollToBottom` when calling it in
+  response to resize or layout changes. This option skips the scroll entirely if
+  the user is not already near the bottom, so it never interrupts someone reading
+  earlier messages.
+
+  ```typescript
+  stickToBottom.scrollToBottom({ preserveScrollPosition: true });
+  ```
+</Tip>

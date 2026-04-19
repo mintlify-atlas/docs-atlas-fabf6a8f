@@ -1,80 +1,173 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Quickstart: install and wire up auto-scroll"
+description: "Install stick-to-bottom-svelte and add smart auto-scroll to a Svelte 5 component in minutes. Covers element binding, spring tuning, and reactive state."
 ---
 
-## Get started in three steps
+This page walks you through installing `stick-to-bottom-svelte` and wiring it up in a Svelte 5 component. By the end you will have a scrollable container that automatically tracks new content and respects user scroll intent, with a spring-physics animation you can tune to match your product.
 
-Get your documentation site running locally and make your first customization.
+## Installation
 
-### Step 1: Set up your local environment
+Install the package from npm using your preferred package manager.
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<CodeGroup>
 
-### Step 2: Deploy your changes
+```bash npm
+npm install stick-to-bottom-svelte
+```
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+```bash pnpm
+pnpm install stick-to-bottom-svelte
+```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+```bash yarn
+yarn add stick-to-bottom-svelte
+```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+```bash bun
+bun add stick-to-bottom-svelte
+```
 
-### Step 3: Go live
+</CodeGroup>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+## Basic usage
 
-## Next steps
+<Steps>
+  <Step title="Import StickToBottom">
+    Import the class from the package. It is the only export.
 
-Now that you have your docs running, explore these key features:
+    ```typescript
+    import { StickToBottom } from 'stick-to-bottom-svelte';
+    ```
+  </Step>
 
-<CardGroup cols={2}>
+  <Step title="Create an instance with element getters">
+    Instantiate `StickToBottom` inside your component's `<script>`, passing getter functions for your scroll container element and the inner content element. Using getter functions lets the class resolve the elements reactively after they are bound to the DOM.
 
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
+    ```svelte
+    <script lang="ts">
+      import { StickToBottom } from 'stick-to-bottom-svelte';
 
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
+      let scrollElement = $state<HTMLElement>();
+      let contentElement = $state<HTMLElement>();
 
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
+      const stickToBottom = new StickToBottom({
+        scrollElement: () => scrollElement,
+        contentElement: () => contentElement,
+      });
+    </script>
+    ```
+  </Step>
 
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
+  <Step title="Bind elements in your template">
+    Use `bind:this` to connect your DOM elements to the state variables. The outer element must be the scrollable container; the inner element wraps all scrolled content.
 
-</CardGroup>
+    ```svelte
+    <div bind:this={scrollElement} class="h-96 overflow-y-auto">
+      <div bind:this={contentElement}>
+        <!-- content goes here -->
+      </div>
+    </div>
+    ```
+  </Step>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+  <Step title="Full working example">
+    Here is a complete component. New items added to `messages` will trigger an auto-scroll whenever the user is already near the bottom.
+
+    ```svelte
+    <script lang="ts">
+      import { StickToBottom } from 'stick-to-bottom-svelte';
+
+      let messages = $state([]);
+      let scrollElement = $state<HTMLElement>();
+      let contentElement = $state<HTMLElement>();
+
+      const stickToBottom = new StickToBottom({
+        scrollElement: () => scrollElement,
+        contentElement: () => contentElement,
+      });
+
+      function addMessage(text: string) {
+        messages = [...messages, { text, id: Date.now() }];
+      }
+    </script>
+
+    <div bind:this={scrollElement} class="h-96 overflow-y-auto">
+      <div bind:this={contentElement}>
+        {#each messages as message (message.id)}
+          <div>{message.text}</div>
+        {/each}
+      </div>
+    </div>
+    ```
+  </Step>
+</Steps>
+
+## Configuration
+
+The constructor accepts spring animation options alongside the required element getters. These three properties control the physics of the scroll animation.
+
+```svelte
+<script lang="ts">
+  import { StickToBottom } from 'stick-to-bottom-svelte';
+
+  let scrollElement = $state<HTMLElement>();
+  let contentElement = $state<HTMLElement>();
+
+  const stickToBottom = new StickToBottom({
+    scrollElement: () => scrollElement,
+    contentElement: () => contentElement,
+
+    // Spring animation — all optional, defaults shown
+    damping: 0.7,    // 0–1: how much oscillation is dampened
+    stiffness: 0.05, // 0–1: how quickly the scroll builds speed
+    mass: 1.25,      // higher values slow the animation
+
+    // Use 'instant' to skip animation entirely
+    resize: 'instant',  // animation used when content resizes
+    initial: true,      // set to false to skip the initial scroll
+  });
+</script>
+```
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `damping` | `number` | `0.7` | Amount of damping applied to the spring. `0` = no damping, `1` = full damping. |
+| `stiffness` | `number` | `0.05` | How fast the animation accelerates toward the target. |
+| `mass` | `number` | `1.25` | Inertial mass. Higher values produce slower, heavier-feeling scrolls. |
+| `resize` | `Animation` | spring defaults | Animation used when a content resize triggers a scroll. |
+| `initial` | `Animation \| boolean` | `true` | Animation used on first render. Pass `false` to start without scrolling. |
+
+## Reactive state
+
+`StickToBottom` exposes three reactive properties you can read inside `$effect` blocks or bind to your template.
+
+```svelte
+<script lang="ts">
+  // ...
+
+  $effect(() => {
+    if (stickToBottom.isNearBottom) {
+      console.log('Auto-scroll is active');
+    } else {
+      console.log('User has scrolled up — auto-scroll paused');
+    }
+  });
+</script>
+
+<!-- Show a "scroll to bottom" button when the user has scrolled away -->
+{#if !stickToBottom.isNearBottom}
+  <button onclick={() => stickToBottom.scrollToBottom('instant')}>
+    Scroll to bottom
+  </button>
+{/if}
+```
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `isNearBottom` | `boolean` | `true` when the scroll position is within 70 px of the bottom. Auto-scroll is active while this is `true`. |
+| `scrollTop` | `number` | The current `scrollTop` of the scroll element. Reactive — reads from the DOM on each scroll event. |
+| `targetScrollTop` | `number` | The maximum scrollable distance (`scrollHeight - 1 - clientHeight`). |
+
+<Tip>
+  For more advanced patterns — chat interfaces with incoming WebSocket messages, live log viewers with instant scrolling, and programmatic control with `scrollToBottom()` and `stopScroll()` — see the guides section.
+</Tip>

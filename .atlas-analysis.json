@@ -1,0 +1,84 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "stick-to-bottom-svelte",
+  "projectDescription": "A Svelte 5 library that automatically scrolls containers to the bottom when new content is added, with smart user-interaction detection and configurable spring animations.",
+  "theme": "luma",
+  "primaryColor": "#3B82F6",
+  "lightColor": "#EFF6FF",
+  "darkColor": "#1E3A5F",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/chat-interfaces",
+              "guides/live-logs",
+              "guides/streaming-content",
+              "guides/manual-control"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/auto-scroll-logic",
+              "concepts/animation-system",
+              "concepts/user-interaction"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "API Reference",
+            "pages": [
+              "api/stick-to-bottom",
+              "api/options",
+              "api/types"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Automatic scroll-to-bottom when new content is added",
+    "Smart user interaction detection — pauses auto-scroll when users scroll up",
+    "Configurable spring animations with damping, stiffness, and mass controls",
+    "Instant scroll option for immediate positioning",
+    "Programmatic scrollToBottom() and stopScroll() methods",
+    "Touch and mouse selection awareness",
+    "Full TypeScript support with exported type definitions",
+    "Zero runtime dependencies (Svelte 5 peer only)"
+  ],
+  "publicApiSurface": [
+    "StickToBottom (class)",
+    "StickToBottomOptions (interface)",
+    "ScrollToBottomOptions (type)",
+    "SpringAnimation (type)",
+    "Animation (type)",
+    "GetTargetScrollTop (type)",
+    "ScrollElements (interface)",
+    "StickToBottomState (interface)",
+    "StickToBottomAnimationState (interface)",
+    "stickToBottom.scrollToBottom(options?)",
+    "stickToBottom.stopScroll()",
+    "stickToBottom.isNearBottom",
+    "stickToBottom.isAtBottom",
+    "stickToBottom.escapedFromLock",
+    "stickToBottom.scrollTop",
+    "stickToBottom.targetScrollTop",
+    "stickToBottom.scrollDifference"
+  ]
+}
